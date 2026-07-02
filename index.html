@@ -146,6 +146,23 @@
         </div>
     </div>
 
+    <!-- 인앱 브라우저 경고 안내 모달 (네이버/카톡 등) -->
+    <div id="inAppModal" class="fixed inset-0 bg-black bg-opacity-70 hidden flex items-center justify-center z-50 px-4">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full">
+            <h3 class="font-bold text-red-600 text-lg mb-2">⚠️ 공유 기능 제한 안내</h3>
+            <p class="text-gray-700 mb-4 text-sm break-keep leading-relaxed">
+                현재 사용 중이신 <b>네이버 앱 / 카카오톡 내부 브라우저</b>에서는 보안상 파일 직접 공유가 차단되어 있습니다.<br><br>
+                💡 <b>해결 방법:</b><br>
+                1. 화면 우측 하단(또는 상단)의 <b>[⁝]</b> 또는 <b>[↑]</b> 버튼을 눌러 <b>'다른 브라우저로 열기(Safari, 삼성인터넷, 크롬)'</b>를 선택하여 실행해주세요.<br>
+                2. 또는 아래 버튼을 눌러 기기에 직접 <b>다운로드 후 메일/카톡 앱에 수동으로 첨부</b>하실 수 있습니다.
+            </p>
+            <div class="flex flex-col gap-2">
+                <button id="inAppDownloadBtn" class="w-full bg-blue-600 text-white py-3 rounded-lg font-bold">⬇️ 기기에 직접 다운로드하기</button>
+                <button onclick="document.getElementById('inAppModal').classList.add('hidden')" class="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-bold">창 닫기</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 엑셀 양식 수동 선택기 (숨김) -->
     <input type="file" id="fallbackTemplateInput" accept=".xlsx" class="hidden">
 
@@ -154,7 +171,6 @@
         let purposes = []; 
         let analyzedReceipts = []; 
         
-        // ★ 핵심 추가: 완성된 엑셀 파일을 담아둘 변수
         let generatedFile = null;
         let isReadyToShare = false;
 
@@ -178,7 +194,11 @@
             alertModal: document.getElementById('alertModal'),
             regionModal: document.getElementById('regionModal'),
             regionInputsContainer: document.getElementById('regionInputsContainer'),
-            fallbackTemplateInput: document.getElementById('fallbackTemplateInput')
+            fallbackTemplateInput: document.getElementById('fallbackTemplateInput'),
+
+            // 추가된 인앱 브라우저 모달 요소
+            inAppModal: document.getElementById('inAppModal'),
+            inAppDownloadBtn: document.getElementById('inAppDownloadBtn')
         };
 
         // Init
@@ -470,11 +490,21 @@
             els.startBtn.innerText = '🚀 최종 정산서 만들기';
         }
 
+        // 인앱 브라우저 다운로드 경고창 띄우기
+        function showInAppWarning(file, fileName) {
+            els.inAppModal.classList.remove('hidden');
+            els.inAppDownloadBtn.onclick = () => {
+                saveAs(file, fileName);
+                els.inAppModal.classList.add('hidden');
+                addLog('⬇️ 기기에 파일이 저장되었습니다. 메일 앱 등에서 첨부해주세요.');
+            };
+        }
+
         // ==========================================
         // 버튼 클릭 메인 로직 (생성 vs 공유 분리)
         // ==========================================
         els.startBtn.addEventListener('click', async () => {
-            // ★ 이미 엑셀 파일이 만들어진 상태라면 즉시 공유 창만 띄움! (다운로드 X)
+            // ★ 이미 엑셀 파일이 만들어진 상태라면 즉시 공유 창만 띄움!
             if (isReadyToShare && generatedFile) {
                 if (navigator.canShare && navigator.canShare({ files: [generatedFile] })) {
                     try {
@@ -482,17 +512,19 @@
                             title: generatedFile.name,
                             files: [generatedFile]
                         });
-                        addLog('✨ 공유 창이 열렸습니다. 전송을 완료해주세요!');
+                        addLog('✨ 공유 창이 열렸습니다. 메일이나 카톡을 선택하여 전송해주세요!');
                     } catch (e) {
                         // 사용자가 단순히 공유 창을 X 눌러서 닫은 경우 무시
                         if (e.name !== 'AbortError') {
-                            addLog('⚠️ 현재 앱(네이버/카카오 등)에서 파일 공유를 막고 있어 다운로드됩니다.', true);
-                            saveAs(generatedFile, generatedFile.name);
+                            // 공유 기능이 실패한 경우 (네이버/카카오톡 등 인앱 브라우저 차단)
+                            showInAppWarning(generatedFile, generatedFile.name);
+                        } else {
+                            addLog('✨ 공유가 취소되었습니다.');
                         }
                     }
                 } else {
-                    addLog('⚠️ 브라우저가 공유 기능을 지원하지 않아 다운로드합니다.', true);
-                    saveAs(generatedFile, generatedFile.name);
+                    // 애초에 브라우저가 지원하지 않는 경우
+                    showInAppWarning(generatedFile, generatedFile.name);
                 }
                 return;
             }
@@ -724,14 +756,14 @@
                 // 버튼을 [공유하기] 버튼으로 눈에 띄게 변신시킵니다.
                 els.startBtn.classList.remove('bg-green-600', 'active:bg-green-700');
                 els.startBtn.classList.add('bg-blue-600', 'active:bg-blue-700', 'animate-pulse');
-                els.startBtn.innerText = '📤 엑셀 완성! 카톡/메일로 바로 보내기';
+                els.startBtn.innerText = '📤 엑셀 완성! 메일/카톡으로 바로 보내기';
                 
                 // 분석 완료 후 데이터베이스 초기화
                 analyzedReceipts = [];
                 await localforage.removeItem('analyzed_receipts');
                 updateReceiptUI();
                 
-                addLog('✨ 정산서 엑셀이 완성되었습니다! 위 파란색 버튼을 눌러 바로 카톡으로 공유하세요.');
+                addLog('✨ 정산서 엑셀이 완성되었습니다! 위 파란색 버튼을 눌러 공유하세요.');
 
             } catch (err) {
                 addLog(`[오류] 엑셀 생성 중 오류: ${err.message}`, true);
