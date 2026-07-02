@@ -153,6 +153,10 @@
         // State
         let purposes = []; 
         let analyzedReceipts = []; 
+        
+        // ★ 핵심 추가: 완성된 엑셀 파일을 담아둘 변수
+        let generatedFile = null;
+        let isReadyToShare = false;
 
         // Elements
         const els = {
@@ -264,6 +268,9 @@
                 els.uploadText.innerText = "⏳ AI 분석 중... 잠시만요!";
                 els.uploadText.classList.add('text-blue-600', 'font-bold');
 
+                // 파일 올리면 새 작업이므로 버튼 원상복구
+                resetShareButton();
+
                 try {
                     for (let i = 0; i < files.length; i++) {
                         const file = files[i];
@@ -343,6 +350,7 @@
             await localforage.setItem('analyzed_receipts', analyzedReceipts);
             updateReceiptUI();
             addLog(`[안내] 영수증 데이터 1건이 삭제되었습니다.`);
+            resetShareButton();
         };
 
         // 출장 목적 UI 업데이트
@@ -366,6 +374,7 @@
             purposes.splice(idx, 1);
             updatePurposeUI();
             saveConfig(); 
+            resetShareButton();
         }
 
         els.addPurposeBtn.addEventListener('click', () => {
@@ -387,6 +396,7 @@
 
             ['partner', 'company', 'location', 'equipment', 'task'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('paid').value = '무상';
+            resetShareButton();
         });
 
         // Gemini API
@@ -451,10 +461,43 @@
             });
         }
 
+        // 공유 버튼 리셋 함수
+        function resetShareButton() {
+            isReadyToShare = false;
+            generatedFile = null;
+            els.startBtn.classList.remove('bg-blue-600', 'active:bg-blue-700', 'animate-pulse');
+            els.startBtn.classList.add('bg-green-600', 'active:bg-green-700');
+            els.startBtn.innerText = '🚀 최종 정산서 만들기';
+        }
+
         // ==========================================
-        // 최종 엑셀 정산 생성 로직
+        // 버튼 클릭 메인 로직 (생성 vs 공유 분리)
         // ==========================================
         els.startBtn.addEventListener('click', async () => {
+            // ★ 이미 엑셀 파일이 만들어진 상태라면 즉시 공유 창만 띄움! (다운로드 X)
+            if (isReadyToShare && generatedFile) {
+                if (navigator.canShare && navigator.canShare({ files: [generatedFile] })) {
+                    try {
+                        await navigator.share({
+                            title: generatedFile.name,
+                            files: [generatedFile]
+                        });
+                        addLog('✨ 공유 창이 열렸습니다. 전송을 완료해주세요!');
+                    } catch (e) {
+                        // 사용자가 단순히 공유 창을 X 눌러서 닫은 경우 무시
+                        if (e.name !== 'AbortError') {
+                            addLog('⚠️ 현재 앱(네이버/카카오 등)에서 파일 공유를 막고 있어 다운로드됩니다.', true);
+                            saveAs(generatedFile, generatedFile.name);
+                        }
+                    }
+                } else {
+                    addLog('⚠️ 브라우저가 공유 기능을 지원하지 않아 다운로드합니다.', true);
+                    saveAs(generatedFile, generatedFile.name);
+                }
+                return;
+            }
+
+            // --- 이 아래부터는 엑셀을 "새로 만드는" 로직 ---
             if (document.getElementById('partner').value.trim()) els.addPurposeBtn.click();
             saveConfig();
 
@@ -497,14 +540,15 @@
                         regionMap[d] = document.getElementById(`region_${d}`).value.trim();
                     });
                     els.regionModal.classList.add('hidden');
-                    generateAndShareExcel(regionMap);
+                    generateExcelFile(regionMap);
                 };
             } else {
-                generateAndShareExcel({});
+                generateExcelFile({});
             }
         });
 
-        async function generateAndShareExcel(regionMap) {
+        // 엑셀을 만들고, 다운로드 없이 공유 버튼으로 변신시키는 함수
+        async function generateExcelFile(regionMap) {
             els.startBtn.disabled = true;
             els.startBtn.innerText = '엑셀 생성 중...';
             addLog('\n--- 엑셀 데이터 매핑을 시작합니다 ---');
@@ -540,9 +584,7 @@
                         }
                     }
 
-                    if (!fetchSuccess) {
-                        throw new Error("모든 경로에서 파일을 찾지 못했습니다.");
-                    }
+                    if (!fetchSuccess) throw new Error("모든 경로에서 파일을 찾지 못했습니다.");
 
                 } catch (fetchErr) {
                     addLog('⚠️ 서버에서 양식을 찾을 수 없어 수동으로 불러옵니다.', true);
@@ -672,45 +714,30 @@
                 const fileName = `국내출장경비정산서_${els.author.value.trim()}_${today.getFullYear()}${String(today.getMonth()+1).padStart(2,'0')}${String(today.getDate()).padStart(2,'0')}.xlsx`;
                 const buffer = await workbook.xlsx.writeBuffer();
                 
-                // ★ 공유를 위한 엑셀 MIME 타입 명시 적용
                 const fileType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
                 const blob = new Blob([buffer], { type: fileType });
-                const fileToShare = new File([blob], fileName, { type: fileType });
+                
+                // 완성된 파일을 전역 변수에 예쁘게 담아둡니다.
+                generatedFile = new File([blob], fileName, { type: fileType });
+                isReadyToShare = true; // 공유 준비 완료 상태로 변경!
 
-                // ★ 수정된 핵심 공유 로직: 강제 다운로드를 막고 공유하기 창만 띄움
-                if (navigator.canShare && navigator.canShare({ files: [fileToShare] })) {
-                    try {
-                        await navigator.share({
-                            title: '경비정산서',
-                            files: [fileToShare]
-                        });
-                        addLog('🎉 엑셀 생성 및 공유 화면 띄우기 완료!');
-                    } catch (e) {
-                        // 사용자가 창을 닫았을 때(AbortError)는 아무것도 하지 않음 (강제 다운로드 X)
-                        if (e.name !== 'AbortError') {
-                            saveAs(blob, fileName);
-                            showAlert('안내', '공유 중 오류가 발생하여 기기에 직접 다운로드 되었습니다.');
-                        } else {
-                            addLog('✨ 공유가 취소되었습니다.');
-                        }
-                    }
-                } else {
-                    // 공유 기능을 지원하지 않는 기기(PC 등)일 경우에만 다운로드 진행
-                    saveAs(blob, fileName);
-                    showAlert('완료', '이 기기는 파일 바로 공유를 지원하지 않아 엑셀이 기기에 직접 다운로드 되었습니다.');
-                }
-
+                // 버튼을 [공유하기] 버튼으로 눈에 띄게 변신시킵니다.
+                els.startBtn.classList.remove('bg-green-600', 'active:bg-green-700');
+                els.startBtn.classList.add('bg-blue-600', 'active:bg-blue-700', 'animate-pulse');
+                els.startBtn.innerText = '📤 엑셀 완성! 카톡/메일로 바로 보내기';
+                
                 // 분석 완료 후 데이터베이스 초기화
                 analyzedReceipts = [];
                 await localforage.removeItem('analyzed_receipts');
                 updateReceiptUI();
-                addLog('✨ 정산이 완료되어 영수증 보관함을 깔끔하게 비웠습니다.');
+                
+                addLog('✨ 정산서 엑셀이 완성되었습니다! 위 파란색 버튼을 눌러 바로 카톡으로 공유하세요.');
 
             } catch (err) {
                 addLog(`[오류] 엑셀 생성 중 오류: ${err.message}`, true);
+                resetShareButton();
             } finally {
                 els.startBtn.disabled = false;
-                els.startBtn.innerText = '🚀 최종 정산서 만들기';
             }
         }
     </script>
